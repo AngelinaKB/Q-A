@@ -15,6 +15,7 @@ import re
 import sqlglot
 import sqlglot.expressions as exp
 
+from backend.config import settings
 from backend.prompt import ALLOWED_TABLES, BLOCKED_COLUMNS
 
 
@@ -106,12 +107,12 @@ def _check_structure(sql: str) -> ValidationResult:
             "SELECT * is not allowed — specify column names explicitly",
         )
 
-    # Must have LIMIT ≤ 1000
+    # Must have LIMIT ≤ max_rows
     limit_node = tree.find(exp.Limit)
     if limit_node is None:
         return ValidationResult.fail(
             "SQL_MISSING_LIMIT",
-            "Query must include a LIMIT clause (max 1000)",
+            f"Query must include a LIMIT clause (max {settings.max_rows})",
         )
 
     try:
@@ -122,10 +123,10 @@ def _check_structure(sql: str) -> ValidationResult:
             "LIMIT value could not be parsed",
         )
 
-    if limit_val > 1000:
+    if limit_val > settings.max_rows:
         return ValidationResult.fail(
             "SQL_LIMIT_EXCEEDED",
-            f"LIMIT {limit_val} exceeds the maximum of 1000",
+            f"LIMIT {limit_val} exceeds the maximum of {settings.max_rows}",
         )
 
     # No subqueries
