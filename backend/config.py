@@ -4,19 +4,28 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     # OpenAI
     openai_api_key: str
-    openai_model: str = "gpt-4o"
-    openai_max_tokens: int = 1000
-    openai_temperature: float = 0.0  # deterministic SQL generation
+    openai_model: str
+    openai_max_tokens: int
+    openai_temperature: float
 
-    # Snowflake
-    snowflake_account: str      # e.g. xy12345.us-east-1
+    # Snowflake connection
+    snowflake_account: str
     snowflake_user: str
-    snowflake_password: str
     snowflake_database: str
     snowflake_schema: str
     snowflake_warehouse: str
-    snowflake_role: str = "OPS_QA_READONLY"
-    snowflake_query_timeout: int = 10   # seconds — from design doc §11
+    snowflake_role: str
+    snowflake_query_timeout: int
+
+    # Snowflake auth method: "password" or "externalbrowser" (SSO/web)
+    snowflake_auth_method: str
+
+    # Only required when snowflake_auth_method=password
+    snowflake_password: str = ""
+
+    # App
+    max_rows: int
+    cors_allow_origin: str
 
     class Config:
         env_file = ".env"
