@@ -4,8 +4,6 @@ from contextlib import contextmanager
 
 from backend.config import settings
 
-MAX_ROWS = 1000  # hard cap — matches design doc §11
-
 
 class DBError(Exception):
     pass
@@ -15,27 +13,47 @@ class QueryTimeoutError(DBError):
     pass
 
 
-def _get_connection():
+def _build_connect_kwargs() -> dict:
     """
-    Open a fresh Snowflake connection.
-    We open per-request in Phase 2; a connection pool can be layered
-    in during Phase 7 production hardening.
+    Build Snowflake connection kwargs from env config.
+    Supports two auth methods:
+      - "password"         — standard user/password
+      - "externalbrowser"  — SSO / web-based login (Okta, Azure AD, etc.)
     """
-    try:
-        conn = snowflake.connector.connect(
-            account=settings.snowflake_account,
-            user=settings.snowflake_user,
-            password=settings.snowflake_password,
-            database=settings.snowflake_database,
-            schema=settings.snowflake_schema,
-            warehouse=settings.snowflake_warehouse,
-            role=settings.snowflake_role,
-            # Enforce query timeout at the session level
-            session_parameters={
-                "STATEMENT_TIMEOUT_IN_SECONDS": str(settings.snowflake_query_timeout),
-            },
+    kwargs = dict(
+        account=settings.snowflake_account,
+        user=settings.snowflake_user,
+        database=settings.snowflake_database,
+        schema=settings.snowflake_schema,
+        warehouse=settings.snowflake_warehouse,
+        role=settings.snowflake_role,
+        session_parameters={
+            "STATEMENT_TIMEOUT_IN_SECONDS": str(settings.snowflake_query_timeout),
+        },
+    )
+
+    method = settings.snowflake_auth_method.lower()
+
+    if method == "externalbrowser":
+        kwargs["authenticator"] = "externalbrowser"
+    elif method == "password":
+        if not settings.snowflake_password:
+            raise DBError(
+                "SNOWFLAKE_PASSWORD is required when SNOWFLAKE_AUTH_METHOD=password"
+            )
+        kwargs["password"] = settings.snowflake_password
+    else:
+        raise DBError(
+            f"Unknown SNOWFLAKE_AUTH_METHOD={method!r}. "
+            "Valid values: 'password', 'externalbrowser'"
         )
-        return conn
+
+    return kwargs
+
+
+def _get_connection():
+    try:
+        return snowflake.connector.connect(**_build_connect_kwargs())
     except snowflake.connector.errors.DatabaseError as e:
         raise DBError(f"Could not connect to Snowflake: {e}") from e
 
@@ -52,16 +70,13 @@ def get_connection():
 def execute_query(sql: str) -> list[dict]:
     """
     Execute a validated SELECT query and return rows as a list of dicts.
-    Enforces MAX_ROWS even if the SQL somehow slipped through without a LIMIT.
-    Raises DBError on failure, QueryTimeoutError on timeout.
+    Row cap is read from settings.max_rows — never hardcoded.
     """
     with get_connection() as conn:
         try:
             cursor = conn.cursor(DictCursor)
             cursor.execute(sql)
-            rows = cursor.fetchmany(MAX_ROWS)
-
-            # Convert to plain dicts (some Snowflake types need coercion)
+            rows = cursor.fetchmany(settings.max_rows)
             return [_coerce_row(r) for r in rows]
 
         except snowflake.connector.errors.ProgrammingError as e:
@@ -76,10 +91,6 @@ def execute_query(sql: str) -> list[dict]:
 
 
 def _coerce_row(row: dict) -> dict:
-    """
-    Snowflake returns some types (Decimal, date, datetime) that aren't
-    JSON-serialisable by default. Convert them to standard Python types.
-    """
     from decimal import Decimal
     from datetime import date, datetime
 
